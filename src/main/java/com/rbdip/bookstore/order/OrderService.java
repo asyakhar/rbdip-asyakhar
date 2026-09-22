@@ -15,67 +15,90 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class OrderService {
 
+    private static final String DEFAULT_CUSTOMER_TYPE = "regular";
+    private static final int DEFAULT_QUANTITY = 1;
+
     private final ProductRepository productRepository;
     private final OrderRepository orderRepository;
     private final OrderItemRepository orderItemRepository;
+    private final OrderEmailService emailService;
     private final PricingCalculator pricingCalculator = new PricingCalculator();
 
     public OrderService(
             ProductRepository productRepository,
             OrderRepository orderRepository,
-            OrderItemRepository orderItemRepository) {
+            OrderItemRepository orderItemRepository,
+            OrderEmailService emailService) {
         this.productRepository = productRepository;
         this.orderRepository = orderRepository;
         this.orderItemRepository = orderItemRepository;
+        this.emailService = emailService;
     }
 
     @Transactional
     public Order createOrder(CreateOrderRequest request) {
-        if (request.customerFullName() == null || request.customerFullName().isBlank()) {
-            throw new IllegalArgumentException("customerFullName is required");
-        }
-        if (request.customerAddress() == null || request.customerAddress().isBlank()) {
-            throw new IllegalArgumentException("customerAddress is required");
-        }
+        validate(request);
+        List<Product> products = loadProducts(request);
+        BigDecimal total = calculateTotal(request, products);
+        Order order = saveOrder(request);
+        saveOrderItems(order, products, request);
+        emailService.sendConfirmation(request.customerFullName(), order.getId(), total);
+        return order;
+    }
+
+    private void validate(CreateOrderRequest request) {
+        requireText(request.customerFullName(), "customerFullName");
+        requireText(request.customerAddress(), "customerAddress");
         if (request.items() == null || request.items().isEmpty()) {
             throw new IllegalArgumentException("order must contain at least one item");
         }
+    }
 
+    private void requireText(String value, String fieldName) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(fieldName + " is required");
+        }
+    }
+
+    private List<Product> loadProducts(CreateOrderRequest request) {
         List<Product> products = new ArrayList<>();
-        List<PricingCalculator.LineItem> lineItems = new ArrayList<>();
-        for (CreateOrderRequest.Item raw : request.items()) {
-            Product product = productRepository.findById(raw.productId())
-                    .orElseThrow(() -> new IllegalArgumentException("product " + raw.productId() + " not found"));
-            int quantity = raw.quantity() == null ? 1 : raw.quantity();
+        for (CreateOrderRequest.Item item : request.items()) {
+            Product product = productRepository.findById(item.productId())
+                    .orElseThrow(() -> new IllegalArgumentException("product " + item.productId() + " not found"));
+            int quantity = item.quantity() == null ? DEFAULT_QUANTITY : item.quantity();
             if (quantity <= 0) {
                 throw new IllegalArgumentException("quantity must be positive");
             }
             products.add(product);
-            lineItems.add(new PricingCalculator.LineItem(product.getPrice(), quantity));
         }
-
-        BigDecimal total = pricingCalculator.calculateOrderTotal(
-                lineItems, request.customerType() == null ? "regular" : request.customerType(), request.couponCode());
-
-        Order order = new Order(
-                request.customerFullName(), request.customerAddress(), request.customerPhone(), "new");
-        order = orderRepository.save(order);
-
-        for (int i = 0; i < products.size(); i++) {
-            Product product = products.get(i);
-            int quantity = lineItems.get(i).quantity();
-            orderItemRepository.save(new OrderItem(order.getId(), product.getName(), product.getPrice(), quantity));
-        }
-
-        sendConfirmationEmail(request.customerFullName(), order.getId(), total);
-
-        return order;
+        return products;
     }
 
-    private void sendConfirmationEmail(String customerName, Long orderId, BigDecimal total) {
-        // Реальный почтовый транспорт не настроен в учебном проекте - здесь
-        // просто эмулируется побочный эффект отправки письма.
-        System.out.printf(
-                "[email] Dear %s, your order #%d for %s has been placed.%n", customerName, orderId, total);
+    private BigDecimal calculateTotal(CreateOrderRequest request, List<Product> products) {
+        List<PricingCalculator.LineItem> lineItems = new ArrayList<>();
+        for (int i = 0; i < products.size(); i++) {
+            int quantity = request.items().get(i).quantity() == null
+                    ? DEFAULT_QUANTITY
+                    : request.items().get(i).quantity();
+            lineItems.add(new PricingCalculator.LineItem(products.get(i).getPrice(), quantity));
+        }
+        String customerType = request.customerType() == null ? DEFAULT_CUSTOMER_TYPE : request.customerType();
+        return pricingCalculator.calculateOrderTotal(lineItems, customerType, request.couponCode());
+    }
+
+    private Order saveOrder(CreateOrderRequest request) {
+        Order order = new Order(
+                request.customerFullName(), request.customerAddress(), request.customerPhone(), "new");
+        return orderRepository.save(order);
+    }
+
+    private void saveOrderItems(Order order, List<Product> products, CreateOrderRequest request) {
+        for (int i = 0; i < products.size(); i++) {
+            Product product = products.get(i);
+            int quantity = request.items().get(i).quantity() == null
+                    ? DEFAULT_QUANTITY
+                    : request.items().get(i).quantity();
+            orderItemRepository.save(new OrderItem(order.getId(), product.getName(), product.getPrice(), quantity));
+        }
     }
 }
