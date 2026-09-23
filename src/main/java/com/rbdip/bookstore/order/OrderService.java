@@ -19,6 +19,7 @@ public class OrderService {
     private static final int DEFAULT_QUANTITY = 1;
 
     private final ProductRepository productRepository;
+    private final CustomerRepository customerRepository;
     private final OrderRepository orderRepository;
     private final OrderItemRepository orderItemRepository;
     private final OrderEmailService emailService;
@@ -26,10 +27,12 @@ public class OrderService {
 
     public OrderService(
             ProductRepository productRepository,
+            CustomerRepository customerRepository,
             OrderRepository orderRepository,
             OrderItemRepository orderItemRepository,
             OrderEmailService emailService) {
         this.productRepository = productRepository;
+        this.customerRepository = customerRepository;
         this.orderRepository = orderRepository;
         this.orderItemRepository = orderItemRepository;
         this.emailService = emailService;
@@ -87,8 +90,9 @@ public class OrderService {
     }
 
     private Order saveOrder(CreateOrderRequest request) {
-        Order order = new Order(
-                request.customerFullName(), request.customerAddress(), request.customerPhone(), "new");
+        Customer customer = customerRepository.save(
+                new Customer(request.customerFullName(), request.customerAddress(), request.customerPhone()));
+        Order order = new Order(customer, "new");
         return orderRepository.save(order);
     }
 
@@ -98,7 +102,7 @@ public class OrderService {
             int quantity = request.items().get(i).quantity() == null
                     ? DEFAULT_QUANTITY
                     : request.items().get(i).quantity();
-            orderItemRepository.save(new OrderItem(order.getId(), product.getName(), product.getPrice(), quantity));
+            orderItemRepository.save(new OrderItem(order.getId(), product, quantity));
         }
     }
 }
