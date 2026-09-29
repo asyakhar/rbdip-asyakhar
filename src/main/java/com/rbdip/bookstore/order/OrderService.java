@@ -90,8 +90,11 @@ public class OrderService {
     }
 
     private Order saveOrder(CreateOrderRequest request) {
+        String[] nameParts = request.customerFullName().trim().split("\\s+", 2);
+        String firstName = nameParts[0];
+        String lastName = nameParts.length > 1 ? nameParts[1] : "";
         Customer customer = customerRepository.save(
-                new Customer(request.customerFullName(), request.customerAddress(), request.customerPhone()));
+                new Customer(firstName, lastName, request.customerAddress(), request.customerPhone()));
         Order order = new Order(customer, "new");
         return orderRepository.save(order);
     }
